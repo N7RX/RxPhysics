@@ -8,15 +8,14 @@ using UnityEngine.Networking;
 /// Supports networking.
 /// Last modified: 2017-07
 /// 
-/// This class defines basic physics attributes and control.
-/// This script should be attached to physics entity.
+/// This class defines basic physics attributes and controls over physics entity.
+/// This script should be attached to single physics object.
 /// </summary>
 [RequireComponent(typeof(Collider))]
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(NetworkIdentity))]
-[RequireComponent(typeof(RxPhysics_Predict))]
 public class RxPhysics_Entity : NetworkBehaviour {
-
+    
     // Physics attributes
     [Header("Physics Attributes")]
     public float Mass = 1;
@@ -36,47 +35,43 @@ public class RxPhysics_Entity : NetworkBehaviour {
 
     // Effects parameters
     [Header("Effects Parameters")]
+    [Range(0, 1)]
+    public float VerticalBounciness = 0.8f;
+    [Range(0, 1)]
+    public float CollideBounciness = 1f;
     [SerializeField]
     private float _detectionBias = 0.02f;
     [SerializeField]
     [Range(0, 1)]
     private float _smoothGravity = 0.02f;
-    [SerializeField]
-    [Range(0, 1)]
-    private float _verticalBounciness = 0.8f;
+
+    // Reference to physics manager (for entity on server)
+    private RxPhysics_Judge _judge;
+    // Reference to physics broker  (for entity on client)
+    private RxPhysics_Broker _broker;
+    // Physics predictor
+    private RxPhysics_Predict _physicsPredictor;
 
     // Unique ID for each entity
     private int _entityID;
-
-    // Reference to physics manager
-    private RxPhysics_Judge _judge;
-
     // Velocity used to calculate collision
     private Vector3 _mathematicalVelocity;
     private Vector3 _lastPos;
-
     // Collider component
     private Collider _collider;
     private float _collideRadius;
-
     // Collision detector
     private Ray _ray;
     private RaycastHit _rayHit;
     private float _detectionRadius;
     private bool  _verticalImpact;
-
+    // Gravity smoother
     private float _gravityScalar;
-
     // Threshold to cut-off vertical speed
     private float _verticalBounceThreshold = float.Epsilon;
-
     // Force that is currently applied to this entity
     private Vector3 _currentlyAppliedForce;
     private Vector3 _acceleration;
-
-    // Physics calculator
-    private RxPhysics_Predict _physicsPredictor;
-
 
     /// <summary>
     /// Initialization
@@ -85,12 +80,13 @@ public class RxPhysics_Entity : NetworkBehaviour {
     {
         _collider = this.GetComponent<Collider>();
         _detectionRadius = _collider.bounds.extents.y * (1 + _detectionBias);
-        _collideRadius = (_collider.bounds.extents.x + _collider.bounds.extents.y + _collider.bounds.extents.z) / 3; // Take Average value
+        _collideRadius = (_collider.bounds.extents.x + _collider.bounds.extents.y + _collider.bounds.extents.z) / 3; // Take average value
         _lastPos = transform.position;
         _currentlyAppliedForce = Vector3.zero;
         _acceleration = Vector3.zero;
         _gravityScalar = Gravity * Mass * _smoothGravity * _smoothGravity * 5; // Empirical value
-        _physicsPredictor = this.GetComponent<RxPhysics_Predict>();
+        _broker = GameObject.FindObjectOfType<RxPhysics_Broker>();
+        _physicsPredictor = _broker.gameObject.GetComponent<RxPhysics_Predict>();
 
         Register();
     }
@@ -104,22 +100,13 @@ public class RxPhysics_Entity : NetworkBehaviour {
         {
             // Directly get reference
             _judge = GameObject.FindObjectOfType<RxPhysics_Judge>();
-            _judge.CmdRequestRegister(this.GetComponent<NetworkIdentity>().netId);
+            _judge.RequestRegister(this.GetComponent<NetworkIdentity>().netId);
 
         }
         else
         {
             // Request reference from broker
-            RxPhysics_Broker broker = GameObject.FindObjectOfType<RxPhysics_Broker>();
-            if (broker.GetPhysicsManagerReference() == null)
-            {
-                GameObject.FindObjectOfType<RxPhysics_Broker>().Subscribe(this);
-            }
-            else
-            {
-                _judge = broker.GetPhysicsManagerReference();
-                _judge.CmdRequestRegister(this.GetComponent<NetworkIdentity>().netId);
-            }
+            _broker.RequestRegister(this.GetComponent<NetworkIdentity>().netId);
         }        
     }
 
@@ -131,16 +118,6 @@ public class RxPhysics_Entity : NetworkBehaviour {
     public void RpcAssignEntityID(int id)
     {
         _entityID = id;
-    }
-
-    /// <summary>
-    /// Update entity's reference to physics manager
-    /// </summary>
-    /// <param name="reference">Manager reference</param>
-    public void UpdateJudgeReference(RxPhysics_Judge reference)
-    {
-        _judge = reference;
-        _judge.CmdRequestRegister(this.GetComponent<NetworkIdentity>().netId);
     }
 
     /// <summary>
@@ -230,7 +207,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
 
         if (Mathf.Abs(TranslateVelocity.y) > _verticalBounceThreshold)
         {
-            TranslateVelocity.y = -TranslateVelocity.y * _verticalBounciness;
+            TranslateVelocity.y = -TranslateVelocity.y * VerticalBounciness;
         }
         else
         {
@@ -288,7 +265,8 @@ public class RxPhysics_Entity : NetworkBehaviour {
 
             // Construct collision data pack
             RxPhysics_CollisionData data = new RxPhysics_CollisionData();
-            data.CollisionTime = Time.time;
+
+            data.CollisionTime = Time.realtimeSinceStartup + _broker.GetClientServerTimeGap();
             data.CollisionVelocity_1 = new Vector4(_entityID, _mathematicalVelocity.x, _mathematicalVelocity.y, _mathematicalVelocity.z);
             data.CollisionVelocity_2 = new Vector4(idPair.y, otherEntity.GetVelocity().x, otherEntity.GetVelocity().y, otherEntity.GetVelocity().z);
             data.CollisionPosition_1 = new Vector4(_entityID, transform.position.x, transform.position.y, transform.position.z);
@@ -302,11 +280,17 @@ public class RxPhysics_Entity : NetworkBehaviour {
                 idPair.y = temp;
             }
 
-            // Request server arbitration
-            _judge.CmdCallCollisonJudge(idPair, data);
+            data.IDPair = idPair;
 
-            //Debug.Log(data.CollisionVelocity_1);
-            //Debug.Log(data.CollisionVelocity_2);
+            // Request server arbitration
+            if (isServer)
+            {
+                _judge.CallCollisonJudge(data);
+            }
+            else
+            {
+                _broker.RequestCollisionJudge(data);
+            }
 
             // Perform local prediction
             _physicsPredictor.PreComputeCollision(data, this, otherEntity);
@@ -339,8 +323,8 @@ public class RxPhysics_Entity : NetworkBehaviour {
     [ClientRpc]
     public void RpcSetPosition(Vector3 position)
     {
-        this.transform.position = position;
-        //this.transform.Translate(position - this.transform.position);
+        //this.transform.position = position;
+        this.transform.Translate(position - this.transform.position);
     }
 
     /// <summary>
@@ -348,9 +332,13 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// </summary>
     private void OnDestroy()
     {
-        if (!isServer)
+        if (isServer)
         {
-            _judge.CmdRemoveEntity(this._entityID);
+            _judge.RemoveEntity(this._entityID);
+        }
+        else
+        {
+            _broker.RequestRemove(this._entityID);
         }
     }
 }

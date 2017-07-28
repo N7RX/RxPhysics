@@ -20,13 +20,10 @@ public class RxPhysics_Judge : NetworkBehaviour {
 
     // Reference to physics calculator
     private RxPhysics_Compute _physicsCalculator;
-
     // Count used to assign entity ID
     private int _entityNum = 0;
-
     // List of registered physics entity
     private Dictionary<int, RxPhysics_Entity> _listOfEntities = new Dictionary<int, RxPhysics_Entity>();
-
     // List of collision waiting to be processed
     private Dictionary<Vector2, RxPhysics_CollisionData> _listOfCollisionRequest = new Dictionary<Vector2, RxPhysics_CollisionData>();
     private Queue<RxPhysics_CollisionData> _listOfCollision = new Queue<RxPhysics_CollisionData>();
@@ -46,19 +43,13 @@ public class RxPhysics_Judge : NetworkBehaviour {
     /// Register new physics entity
     /// </summary>
     /// <param name="entity">New entity to add</param>
-    [Command]
-    public void CmdRequestRegister(NetworkInstanceId identity)
+    [Server]
+    public void RequestRegister(NetworkInstanceId identity)
     {
-        if (!isServer)
-        {
-            return;
-        }
-
         // Find entity reference
         RxPhysics_Entity entity = NetworkServer.FindLocalObject(identity).GetComponent<RxPhysics_Entity>();
         entity.RpcAssignEntityID(_entityNum);
         _listOfEntities.Add(_entityNum, entity);
-
         // Increse ID count
         _entityNum++;
     }
@@ -67,14 +58,9 @@ public class RxPhysics_Judge : NetworkBehaviour {
     /// Remove a entity from current list
     /// </summary>
     /// <param name="id">ID of the entity desired to remove</param>
-    [Command]
-    public void CmdRemoveEntity(int id)
+    [Server]
+    public void RemoveEntity(int id)
     {
-        if (!isServer)
-        {
-            return;
-        }
-
         if (_listOfEntities.ContainsKey(id))
         {
             _listOfEntities.Remove(id);
@@ -85,26 +71,21 @@ public class RxPhysics_Judge : NetworkBehaviour {
     /// Call to the physics manager when collison happened
     /// </summary>
     /// <param name="idPair">IDs of the entities collided</param>
-    [Command]
-    public void CmdCallCollisonJudge(Vector2 idPair, RxPhysics_CollisionData data)
+    [Server]
+    public void CallCollisonJudge(RxPhysics_CollisionData data)
     {
-        if (!isServer)
-        {
-            return;
-        }
-
         // Collision pending
-        if (!_listOfCollisionRequest.ContainsKey(idPair))
+        if (!_listOfCollisionRequest.ContainsKey(data.IDPair))
         {
-            data.Delay = Time.time - data.CollisionTime;
-            data.StartPendingTime = Time.time;
-            _listOfCollisionRequest.Add(idPair, data);
+            data.Delay = Time.realtimeSinceStartup - data.CollisionTime;
+            data.StartPendingTime = Time.realtimeSinceStartup;
+            _listOfCollisionRequest.Add(data.IDPair, data);
         }
         // Collision confirmed
         else
         {
-            _listOfCollision.Enqueue(_listOfCollisionRequest[idPair]); // Take the first arrived data as criteria
-            _listOfCollisionRequest.Remove(idPair);
+            _listOfCollision.Enqueue(_listOfCollisionRequest[data.IDPair]); // Take the first arrived data as criteria
+            _listOfCollisionRequest.Remove(data.IDPair);
         }
     }
 
@@ -131,21 +112,23 @@ public class RxPhysics_Judge : NetworkBehaviour {
             return;
         }
 
-        CheckCollisionPendingTimeout();
+        StartCoroutine(CheckCollisionPendingTimeout());
     }
 
     /// <summary>
     /// Timeout collision pendings
     /// </summary>
-    private void CheckCollisionPendingTimeout()
+    private IEnumerator CheckCollisionPendingTimeout()
     {
         foreach (Vector2 key in _listOfCollisionRequest.Keys)
         {
-            if (Time.time - _listOfCollisionRequest[key].StartPendingTime >= CollisionPendingTimeout)
+            if (Time.realtimeSinceStartup - _listOfCollisionRequest[key].StartPendingTime >= CollisionPendingTimeout)
             {
                 _listOfCollision.Enqueue(_listOfCollisionRequest[key]);
                 _listOfCollisionRequest.Remove(key);
             }
+
+            yield return null;
         }
     }
 
