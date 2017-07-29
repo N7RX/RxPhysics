@@ -18,22 +18,22 @@ public class RxPhysics_Judge : NetworkBehaviour {
     // After which period the pending collision would be calculated directly without waiting for opponent's confirmation
     public float CollisionPendingTimeout = 0.3f;
 
-    // Reference to physics calculator
-    private RxPhysics_Compute _physicsCalculator;
     // Count used to assign entity ID
     private int _entityNum = 0;
+    // Reference to physics calculator
+    private RxPhysics_Compute _physicsCalculator;
     // List of registered physics entity
     private Dictionary<int, RxPhysics_Entity> _listOfEntities = new Dictionary<int, RxPhysics_Entity>();
     // List of collision waiting to be processed
     private Dictionary<Vector2, RxPhysics_CollisionData> _listOfCollisionRequest = new Dictionary<Vector2, RxPhysics_CollisionData>();
     private Queue<RxPhysics_CollisionData> _listOfCollision = new Queue<RxPhysics_CollisionData>();
 
-    private void Start()
+    /// <summary>
+    /// Initialization
+    /// </summary>
+    public override void OnStartServer()
     {
-        if (!isServer)
-        {
-            return;
-        }
+        base.OnStartServer();
 
         DontDestroyOnLoad(transform.gameObject);
         _physicsCalculator = this.GetComponent<RxPhysics_Compute>();
@@ -74,24 +74,55 @@ public class RxPhysics_Judge : NetworkBehaviour {
     [Server]
     public void CallCollisonJudge(RxPhysics_CollisionData data)
     {
+        data.Delay = Time.realtimeSinceStartup - data.CollisionTime;
+
         // Collision pending
         if (!_listOfCollisionRequest.ContainsKey(data.IDPair))
-        {
-            data.Delay = Time.realtimeSinceStartup - data.CollisionTime;
+        {           
             data.StartPendingTime = Time.realtimeSinceStartup;
             _listOfCollisionRequest.Add(data.IDPair, data);
         }
         // Collision confirmed
         else
         {
-            _listOfCollision.Enqueue(_listOfCollisionRequest[data.IDPair]); // Take the first arrived data as criteria
+            _listOfCollision.Enqueue(InterpolateColData(_listOfCollisionRequest[data.IDPair], data));
             _listOfCollisionRequest.Remove(data.IDPair);
         }
     }
 
     /// <summary>
-    /// Functions called per frame
+    /// Interpolate values between two reported collision data
     /// </summary>
+    /// <param name="data_1">Data 1</param>
+    /// <param name="data_2">Data 2</param>
+    /// <returns>Interpolated data</returns>
+    [Server]
+    private RxPhysics_CollisionData InterpolateColData(RxPhysics_CollisionData data_1, RxPhysics_CollisionData data_2)
+    {
+        RxPhysics_CollisionData result = new RxPhysics_CollisionData();
+        result.IDPair = data_1.IDPair;
+
+        // Assign data weight based on client delay
+        float weight_1 = data_2.Delay / (data_1.Delay + data_2.Delay);
+        float weight_2 = 1 - weight_1;
+
+        result.CollisionTime = data_1.CollisionTime * weight_1 + data_2.CollisionTime * weight_2;
+        result.Delay = Mathf.Max(data_1.Delay, data_2.Delay);
+        result.StartPendingTime = Mathf.Min(data_1.StartPendingTime, data_2.StartPendingTime);
+
+        result.CollisionVelocity_1 = data_1.CollisionVelocity_1 * weight_1 + data_2.CollisionVelocity_2 * weight_2;
+        result.CollisionVelocity_1.x = data_1.CollisionVelocity_1.x;
+        result.CollisionVelocity_2 = data_1.CollisionVelocity_2 * weight_1 + data_2.CollisionVelocity_1 * weight_2;
+        result.CollisionVelocity_2.x = data_1.CollisionVelocity_2.x;
+        result.CollisionPosition_1 = data_1.CollisionPosition_1 * weight_1 + data_2.CollisionPosition_2 * weight_2;
+        result.CollisionPosition_1.x = data_1.CollisionPosition_1.x;
+        result.CollisionPosition_2 = data_1.CollisionPosition_2 * weight_1 + data_2.CollisionPosition_1 * weight_2;
+        result.CollisionPosition_2.x = data_1.CollisionPosition_2.x;
+        result.CollisionPoint = data_1.CollisionPoint * weight_1 + data_2.CollisionPoint * weight_2;
+
+        return result;
+    }
+
     private void Update()
     {
         if (!isServer)
@@ -102,9 +133,6 @@ public class RxPhysics_Judge : NetworkBehaviour {
         ProcessCollision();
     }
 
-    /// <summary>
-    /// Functions called per fixed inverval
-    /// </summary>
     private void FixedUpdate()
     {
         if (!isServer)
@@ -116,8 +144,9 @@ public class RxPhysics_Judge : NetworkBehaviour {
     }
 
     /// <summary>
-    /// Timeout collision pendings
+    /// Clear time-out collisoin pendings
     /// </summary>
+    [Server]
     private IEnumerator CheckCollisionPendingTimeout()
     {
         foreach (Vector2 key in _listOfCollisionRequest.Keys)
@@ -133,28 +162,9 @@ public class RxPhysics_Judge : NetworkBehaviour {
     }
 
     /// <summary>
-    /// Predict if collision would happen between two entities
-    /// </summary>
-    /// <param name="entity_1">Entity one</param>
-    /// <param name="entity_2">Entity two</param>
-    /// <returns></returns>
-    //private bool PredictCollision(RxPhysics_Entity entity_1, RxPhysics_Entity entity_2)
-    //{
-    //    if ( ((entity_1.transform.position + entity_1.TranslateVelocity)
-    //        - (entity_2.transform.position + entity_2.TranslateVelocity)).magnitude
-    //        <= entity_1.GetCollideRadius() + entity_2.GetCollideRadius()) // Predict one step ahead
-    //    {
-    //        return true;
-    //    }
-    //    else
-    //    {
-    //        return false;
-    //    }
-    //}
-
-    /// <summary>
     /// Process queued collision
     /// </summary>
+    [Server]
     private void ProcessCollision()
     {
         while (_listOfCollision.Count > 0)

@@ -16,9 +16,11 @@ using UnityEngine.Networking;
 public class RxPhysics_Broker : NetworkBehaviour {
 
     // Connection info
-    public string ServerIP = "10.20.73.58";
+    public string ServerIP = "localhost";
     public int  ServerPort = 7777;
-
+    // Time gap update interval
+    public float TimeGapUpdateInterval = 1f;
+    
     [HideInInspector]
     public readonly int DefaultTimeGap = -65536;
 
@@ -44,26 +46,33 @@ public class RxPhysics_Broker : NetworkBehaviour {
     // Time gap between server and client (client)
     private float _clientSeverTimeGap;
     private bool  _gapNeedsUpdate;
+    private float _lastGapUpdateTime = 0;
 
+    // Length of duration that the entity can't be added force on after a collision
+    private float _refractoryTime = 0.3f;
+
+    /// <summary>
+    /// Initialization
+    /// </summary>
     private void Start()
     {
+        // Server broker
         if (isServer)
         {
-            // Register message handlers
-            NetworkServer.RegisterHandler(RxMsgType.RegisterReq,   OnRegisterReqMsgReceived);
+            NetworkServer.RegisterHandler(RxMsgType.RegisterReq, OnRegisterReqMsgReceived);
             NetworkServer.RegisterHandler(RxMsgType.CollisionData, OnCollisionDataReceived);
-            NetworkServer.RegisterHandler(RxMsgType.RemoveReg,     OnRemoveRegMsgReceived);
+            NetworkServer.RegisterHandler(RxMsgType.RemoveReg, OnRemoveRegMsgReceived);
             NetworkServer.RegisterHandler(RxMsgType.CalibrateTime, OnTimeCalibReqReceived);
 
             _judgeRef = GameObject.FindObjectOfType<RxPhysics_Judge>();
             _clientSeverTimeGap = 0;
         }
+        // Client broker
         else
         {
-            // Client broker
-            _brokerClient = new NetworkClient();      
+            _brokerClient = new NetworkClient();
             _brokerClient.Connect(ServerIP, ServerPort);
-            //_brokerClient.RegisterHandler(RxMsgType.CalibrateTime, OnTimeCalibRepReceived);
+            NetworkManager.singleton.client.RegisterHandler(RxMsgType.CalibrateTime, OnTimeCalibRepReceived);
             _clientSeverTimeGap = DefaultTimeGap;
             _gapNeedsUpdate = true;
         }
@@ -81,8 +90,8 @@ public class RxPhysics_Broker : NetworkBehaviour {
             }
             else
             {
-                RemoveEntities();
                 RegisterEntities();
+                RemoveEntities();
                 ProcessCollision();
             }
         }
@@ -97,12 +106,21 @@ public class RxPhysics_Broker : NetworkBehaviour {
             else
             {
                 SendRegisterData();
-                SendRemoveReq();
                 SendCollisionData();
+                SendRemoveReq();               
 
+                // Update client-server time gap
                 if (_clientSeverTimeGap < DefaultTimeGap + 1)
                 {
                     ReqTimeCalibration();
+                }
+                else
+                {
+                    if (Time.realtimeSinceStartup - _lastGapUpdateTime >= TimeGapUpdateInterval)
+                    {
+                        _gapNeedsUpdate = true;
+                        ReqTimeCalibration();
+                    }
                 }
             }
         }
@@ -116,6 +134,11 @@ public class RxPhysics_Broker : NetworkBehaviour {
     public float GetClientServerTimeGap()
     {
         return _clientSeverTimeGap;
+    }
+
+    public float GetRefractoryTime()
+    {
+        return _refractoryTime;
     }
 
     /// <summary>
@@ -157,7 +180,6 @@ public class RxPhysics_Broker : NetworkBehaviour {
         RxPhysics_TimeReq msg = new RxPhysics_TimeReq();
         msg.conID = _brokerClient.connection.connectionId;
         msg.clientTime = Time.realtimeSinceStartup;
-        msg.netID = this.GetComponent<NetworkIdentity>().netId;
         _brokerClient.Send(RxMsgType.CalibrateTime, msg);
     }
 
@@ -291,32 +313,24 @@ public class RxPhysics_Broker : NetworkBehaviour {
     private void OnTimeCalibReqReceived(NetworkMessage netMsg)
     {
         RxPhysics_TimeReq msg = netMsg.ReadMessage<RxPhysics_TimeReq>();
-        //msg.serverTime = Time.realtimeSinceStartup;
-        //NetworkServer.SendToClient(msg.conID, RxMsgType.CalibrateTime, msg);
-        NetworkServer.FindLocalObject(msg.netID).GetComponent<RxPhysics_Broker>().RpcSetTimeGap(Time.realtimeSinceStartup - msg.clientTime);
+        msg.serverTime = Time.realtimeSinceStartup;
+        NetworkServer.SendToClient(msg.conID, RxMsgType.CalibrateTime, msg);
     }
 
     /// <summary>
     /// Process server's reply on time calibration
     /// </summary>
     /// <param name="netMsg">Network message</param>
-    //[Client]
-    //private void OnTimeCalibRepReceived(NetworkMessage netMsg)
-    //{
-    //    RxPhysics_TimeReq msg = netMsg.ReadMessage<RxPhysics_TimeReq>();
-    //    _clientSeverTimeGap = msg.serverTime - msg.clientTime;
-    //}
-
-    /// <summary>
-    /// Temporary solution to acquire time gap
-    /// </summary>
-    /// <param name="gap">Time gap</param>
-    [ClientRpc]
-    public void RpcSetTimeGap(float gap)
+    [Client]
+    private void OnTimeCalibRepReceived(NetworkMessage netMsg)
     {
+        RxPhysics_TimeReq msg = netMsg.ReadMessage<RxPhysics_TimeReq>();
+      
         if (_gapNeedsUpdate)
         {
-            _clientSeverTimeGap = gap;
+            _gapNeedsUpdate = false;
+            _clientSeverTimeGap = msg.serverTime - msg.clientTime;
+            _lastGapUpdateTime = Time.realtimeSinceStartup;
         }
     }
 }
@@ -334,6 +348,7 @@ public struct RxPhysics_CollisionData
     public Vector4 CollisionVelocity_2;
     public Vector4 CollisionPosition_1; // (int ID, Vec3 Position)
     public Vector4 CollisionPosition_2;
+    public Vector3 CollisionPoint;
 }
 
 /// <summary>
@@ -373,7 +388,6 @@ public class RxPhysics_ColMessage : MessageBase
 public class RxPhysics_TimeReq : MessageBase
 {
     public int conID;
-    public NetworkInstanceId netID;
     public float clientTime;
     public float serverTime;
 }

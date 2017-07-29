@@ -24,26 +24,22 @@ public class RxPhysics_Entity : NetworkBehaviour {
     public bool IsObstacle; // Obstacle's position won't be affected by collision
 
     [Header("Damping")]
-    [Range(0, 1)]
-    public float Friction = 0;
-    [Range(0, 1)]
-    public float AngularDamping = 0;
+    [Range(0, 1)] public float Friction = 0;
+    [Range(0, 1)] public float AngularDamping = 0;
+    [Range(0, 1)] public float VerticalDamping = 0.8f; // Value should be less than 1,
+                                                       // otherwise the object might never settle on the ground if it's bounciness is greater than 1
 
     // Velocity used to move per fixed update
     [HideInInspector]
-    public Vector3 TranslateVelocity;
+    public Vector3 TranslateVelocity = Vector3.zero;
 
     // Effects parameters
     [Header("Effects Parameters")]
-    [Range(0, 1)]
-    public float VerticalBounciness = 0.8f;
-    [Range(0, 1)]
-    public float CollideBounciness = 1f;
-    [SerializeField]
-    private float _detectionBias = 0.02f;
-    [SerializeField]
-    [Range(0, 1)]
-    private float _smoothGravity = 0.02f;
+    [Range(0, 1)] public float Bounciness = 1f;
+    [SerializeField] private float _groundDetectionBias = 0.02f;
+
+    [Header("Network")]
+    [SerializeField] private bool _localSimulationOnly = false;
 
     // Reference to physics manager (for entity on server)
     private RxPhysics_Judge _judge;
@@ -59,19 +55,18 @@ public class RxPhysics_Entity : NetworkBehaviour {
     private Vector3 _lastPos;
     // Collider component
     private Collider _collider;
-    private float _collideRadius;
     // Collision detector
     private Ray _ray;
-    private RaycastHit _rayHit;
     private float _detectionRadius;
-    private bool  _verticalImpact;
+    private float _penetrateRadius;
     // Gravity smoother
     private float _gravityScalar;
-    // Threshold to cut-off vertical speed
-    private float _verticalBounceThreshold = float.Epsilon;
     // Force that is currently applied to this entity
     private Vector3 _currentlyAppliedForce;
     private Vector3 _acceleration;
+    // Length of duration that the entity can't be added force on after a collision
+    private float _refractoryTime = 0;
+    private bool _isRefractory = false;
 
     /// <summary>
     /// Initialization
@@ -79,22 +74,23 @@ public class RxPhysics_Entity : NetworkBehaviour {
     private void Start()
     {
         _collider = this.GetComponent<Collider>();
-        _detectionRadius = _collider.bounds.extents.y * (1 + _detectionBias);
-        _collideRadius = (_collider.bounds.extents.x + _collider.bounds.extents.y + _collider.bounds.extents.z) / 3; // Take average value
+        _detectionRadius = _collider.bounds.extents.y * (1 + _groundDetectionBias);
+        _penetrateRadius = _collider.bounds.extents.y * 0.9f; // Empirical value
         _lastPos = transform.position;
         _currentlyAppliedForce = Vector3.zero;
         _acceleration = Vector3.zero;
-        _gravityScalar = Gravity * Mass * _smoothGravity * _smoothGravity * 5; // Empirical value
+        _gravityScalar = Gravity * Mass * 0.002f; // Empirical value
         _broker = GameObject.FindObjectOfType<RxPhysics_Broker>();
         _physicsPredictor = _broker.gameObject.GetComponent<RxPhysics_Predict>();
+        _refractoryTime = _broker.GetRefractoryTime();
 
-        Register();
+        RegisterEntity();
     }
 
     /// <summary>
     /// Register current entity to physics manager
     /// </summary>
-    private void Register()
+    private void RegisterEntity()
     {
         if (isServer)
         {
@@ -107,7 +103,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
         {
             // Request reference from broker
             _broker.RequestRegister(this.GetComponent<NetworkIdentity>().netId);
-        }        
+        }
     }
 
     /// <summary>
@@ -130,25 +126,14 @@ public class RxPhysics_Entity : NetworkBehaviour {
     }
 
     /// <summary>
-    /// Get entity's collide radius
-    /// </summary>
-    /// <returns>Collide radius</returns>
-    public float GetCollideRadius()
-    {
-        return _collideRadius;
-    }
-
-    /// <summary>
     /// Calculate physics every fixed interval
     /// </summary>
     private void FixedUpdate()
-    {
-        ApplyAccleration();
+    {      
         ImplementGravity();
-        VerticalBounce();
+        ApplyAccleration();
         ApplyVelocity();
-        ApplyFriction();
-
+        ApplyDamping();
         CalibrateVelocity();
     }
 
@@ -184,34 +169,16 @@ public class RxPhysics_Entity : NetworkBehaviour {
             _ray.direction = Vector3.up;
         }
 
-        if (!Physics.Raycast(_ray, out _rayHit, _detectionRadius))
+        if (!Physics.Raycast(_ray, _detectionRadius))
         {         
-            _verticalImpact = false;
             AddForce(_ray.direction * _gravityScalar);
         }
-        else
-        {
-            _verticalImpact = true;
-        }
-    }
 
-    /// <summary>
-    /// Simulate bounce effect when hitting the ground
-    /// </summary>
-    private void VerticalBounce()
-    {
-        if (!_verticalImpact)
+        // Prevent object from penetrating the ground
+        if (Physics.Raycast(_ray, _penetrateRadius))
         {
-            return;
-        }
-
-        if (Mathf.Abs(TranslateVelocity.y) > _verticalBounceThreshold)
-        {
-            TranslateVelocity.y = -TranslateVelocity.y * VerticalBounciness;
-        }
-        else
-        {
-            TranslateVelocity.y = 0;
+            TranslateVelocity.y = -TranslateVelocity.y * Bounciness;
+            transform.Translate(-_ray.direction * _collider.bounds.extents.y * 0.15f); // Empirical value
         }
     }
 
@@ -226,9 +193,10 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// <summary>
     /// Apply damping
     /// </summary>
-    private void ApplyFriction()
+    private void ApplyDamping()
     {
         TranslateVelocity *= (1 - Friction);
+        //...
     }
 
     /// <summary>
@@ -246,7 +214,15 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// <param name="force">Applied force</param>
     public void AddForce(Vector3 force)
     {
-        _currentlyAppliedForce += force;
+        if (!_isRefractory)
+        {
+            _currentlyAppliedForce += force;
+        }
+        else
+        {
+            // Gravity only
+            _currentlyAppliedForce.y += force.y;
+        }
     }
 
     /// <summary>
@@ -271,6 +247,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
             data.CollisionVelocity_2 = new Vector4(idPair.y, otherEntity.GetVelocity().x, otherEntity.GetVelocity().y, otherEntity.GetVelocity().z);
             data.CollisionPosition_1 = new Vector4(_entityID, transform.position.x, transform.position.y, transform.position.z);
             data.CollisionPosition_2 = new Vector4(idPair.y, otherEntity.transform.position.x, otherEntity.transform.position.y, otherEntity.transform.position.z);
+            data.CollisionPoint = other.ClosestPoint(this.transform.position); // Approximate collision point
 
             // Assert pair format
             if (idPair.x < idPair.y)
@@ -279,22 +256,34 @@ public class RxPhysics_Entity : NetworkBehaviour {
                 idPair.x = idPair.y;
                 idPair.y = temp;
             }
-
+            
             data.IDPair = idPair;
 
             // Request server arbitration
-            if (isServer)
-            {
-                _judge.CallCollisonJudge(data);
-            }
-            else
-            {
-                _broker.RequestCollisionJudge(data);
+            if (!_localSimulationOnly)
+            {               
+                if (isServer)
+                {
+                    
+                    _judge.CallCollisonJudge(data);
+                }
+                else
+                {
+                    _broker.RequestCollisionJudge(data);
+                }
             }
 
             // Perform local prediction
             _physicsPredictor.PreComputeCollision(data, this, otherEntity);
+
+            _isRefractory = true;
+            Invoke("RemoveRefractory", _refractoryTime);
         }
+    }
+
+    private void RemoveRefractory()
+    {
+        _isRefractory = false;
     }
 
     /// <summary>
@@ -304,6 +293,15 @@ public class RxPhysics_Entity : NetworkBehaviour {
     public Vector3 GetVelocity()
     {
         return _mathematicalVelocity;
+    }
+
+    /// <summary>
+    /// Check whether this entity is marked local physcis simulation only
+    /// </summary>
+    /// <returns>Local simulation mark</returns>
+    public bool IsLocalSimOnly()
+    {
+        return _localSimulationOnly;
     }
 
     /// <summary>
