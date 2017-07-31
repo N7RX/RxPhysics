@@ -48,9 +48,9 @@ public class RxPhysics_Judge : NetworkBehaviour {
     {
         // Find entity reference
         RxPhysics_Entity entity = NetworkServer.FindLocalObject(identity).GetComponent<RxPhysics_Entity>();
-        entity.RpcAssignEntityID(_entityNum);
+        entity.AssignEntityID(_entityNum);
         _listOfEntities.Add(_entityNum, entity);
-        // Increse ID count
+        // Next assigned ID
         _entityNum++;
     }
 
@@ -176,6 +176,14 @@ public class RxPhysics_Judge : NetworkBehaviour {
             _physicsCalculator.ComputeCollision(data,
                 _listOfEntities[(int)data.CollisionVelocity_1.x],
                 _listOfEntities[(int)data.CollisionVelocity_2.x]);
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (isServer)
+        {
+            NetworkServer.Shutdown();
         }
     }
 

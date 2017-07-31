@@ -38,7 +38,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
                                                        // if it's bounciness is greater than 1 with a zero friction.
     [SerializeField] private float _groundDetectionBias = 0.02f;
     [SerializeField] [Range(0, 0.99f)] private float _penetrateDetectionBias = 0.1f;
-
+    
     [Header("Network")]
     [SerializeField] private bool _localSimulationOnly = false;
 
@@ -51,6 +51,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
 
     // Unique ID for each entity
     private int _entityID;
+    private bool _idSynced = false;
     // Velocity used to calculate collision
     private Vector3 _mathematicalVelocity;
     private Vector3 _lastPos;
@@ -111,17 +112,28 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// </summary>
     private void RegisterEntity()
     {
+        // Server
         if (isServer)
-        {
-            // Directly get reference
+        {         
             _judge = GameObject.FindObjectOfType<RxPhysics_Judge>();
+            // Register all authorized entities on server
+            //if (hasAuthority)
+            //{
+            //    _judge.RequestRegister(this.GetComponent<NetworkIdentity>().netId);
+            //}
+            // Register all spawned entities on server
             _judge.RequestRegister(this.GetComponent<NetworkIdentity>().netId);
-
         }
+        // Client
         else
         {
-            // Request reference from broker
-            _broker.RequestRegister(this.GetComponent<NetworkIdentity>().netId);
+            // Register local player
+            //if (isLocalPlayer)
+            //{
+            //    _broker.RequestRegister(this.GetComponent<NetworkIdentity>().netId);
+            //}
+            // Sync ID from server
+            _broker.RequestSyncID(this.GetComponent<NetworkIdentity>().netId);
         }
     }
 
@@ -129,10 +141,10 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// Assign current entity's ID; Should only be called from physics manager
     /// </summary>
     /// <param name="id">Assigned ID</param>
-    [ClientRpc]
-    public void RpcAssignEntityID(int id)
+    public void AssignEntityID(int id)
     {
         _entityID = id;
+        _idSynced = true;
     }
 
     /// <summary>
@@ -141,9 +153,20 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// <returns>This entity's ID</returns>
     public int GetEntityID()
     {
-        return _entityID;
+        if (_idSynced)
+        {
+            return _entityID;
+        }
+        else
+        {
+            return -1; // Temporary, not a solution
+        }
     }
 
+    /// <summary>
+    /// Get approximate entity bound scale
+    /// </summary>
+    /// <returns>Bound scale on x axis</returns>
     public float GetColliderRadius()
     {
         return _collider.bounds.extents.x;
@@ -153,13 +176,18 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// Calculate physics every fixed interval
     /// </summary>
     private void FixedUpdate()
-    {      
-        ImplementGravity();
-        ApplyAccleration();
-        ApplyVelocity();
-        ApplyDamping();
-        PenetrationAvoidance();
-        CalibrateVelocity();
+    {
+        if (_idSynced)
+        {
+            this.transform.GetComponent<MeshRenderer>().material.color = Color.red;
+
+            ImplementGravity();
+            ApplyAccleration();
+            ApplyVelocity();
+            ApplyDamping();
+            PenetrationAvoidance();
+            CalibrateVelocity();
+        }
     }
 
     /// <summary>
@@ -285,7 +313,8 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// <param name="other">The other collider</param>
     private void OnTriggerEnter(Collider other)
     {
-        if (isLocalPlayer && !IsObstacle)
+        //if (isLocalPlayer && !IsObstacle)
+        if (!IsObstacle)
         {
             if (other.gameObject.GetComponent<RxPhysics_Entity>() != null)
             {
@@ -410,7 +439,10 @@ public class RxPhysics_Entity : NetworkBehaviour {
         }
         else
         {
-            _broker.RequestRemove(this._entityID);
+            if (isLocalPlayer)
+            {
+                _broker.RequestRemove(this._entityID);
+            }
         }
     }
 }

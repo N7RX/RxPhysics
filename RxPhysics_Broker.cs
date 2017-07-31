@@ -16,7 +16,7 @@ using UnityEngine.Networking;
 public class RxPhysics_Broker : NetworkBehaviour {
 
     [Header("Connection Info")]
-    public string ServerIP = "localhost";
+    public string ServerIP = "10.20.73.58";
     public int  ServerPort = 7777;
 
     [Header("Performance")]
@@ -39,6 +39,10 @@ public class RxPhysics_Broker : NetworkBehaviour {
     private Queue<int> _pendingSendRemoveEntitiesID = new Queue<int>();
     // Queued collision data
     private Queue<RxPhysics_CollisionData> _pendingSendCollisionData = new Queue<RxPhysics_CollisionData>();
+    // Queued entities pending to sync entity ID
+    private Queue<NetworkInstanceId> _pendingSyncEntitiesID = new Queue<NetworkInstanceId>();
+    // Queued entity IDs to be distributed
+    private Queue<RxPhysics_IDSync> _pendingDistribID = new Queue<RxPhysics_IDSync>();
 
     // Time gap between server and client
     private float _clientSeverTimeGap;
@@ -71,6 +75,7 @@ public class RxPhysics_Broker : NetworkBehaviour {
             NetworkServer.RegisterHandler(RxMsgType.CollisionData, OnCollisionDataReceived);
             NetworkServer.RegisterHandler(RxMsgType.RemoveReg, OnRemoveRegMsgReceived);
             NetworkServer.RegisterHandler(RxMsgType.CalibrateTime, OnTimeCalibReqReceived);
+            NetworkServer.RegisterHandler(RxMsgType.IDSync, OnSyncIDReqRequest);
 
             _judgeRef = GameObject.FindObjectOfType<RxPhysics_Judge>();
             _clientSeverTimeGap = 0;
@@ -81,6 +86,7 @@ public class RxPhysics_Broker : NetworkBehaviour {
             _brokerClient = new NetworkClient();
             _brokerClient.Connect(ServerIP, ServerPort);
             NetworkManager.singleton.client.RegisterHandler(RxMsgType.CalibrateTime, OnTimeCalibRepReceived);
+            NetworkManager.singleton.client.RegisterHandler(RxMsgType.IDSync, OnSyncIDRepReceived);
             _clientSeverTimeGap = DefaultTimeGap;
             _gapNeedsUpdate = true;
         }
@@ -114,6 +120,8 @@ public class RxPhysics_Broker : NetworkBehaviour {
             else
             {
                 SendRegisterData();
+                SendSyncRequest();
+                DistributeSyncedID();
                 SendCollisionData();
                 SendRemoveReq();               
 
@@ -157,6 +165,16 @@ public class RxPhysics_Broker : NetworkBehaviour {
     public void RequestRegister(NetworkInstanceId id)
     {
         _pendingSendRegEntitiesID.Enqueue(id);
+    }
+
+    /// <summary>
+    /// Add client entity netID to pending sync ID list
+    /// </summary>
+    /// <param name="id">Entity netID</param>
+    [Client]
+    public void RequestSyncID(NetworkInstanceId id)
+    {
+        _pendingSyncEntitiesID.Enqueue(id);
     }
 
     /// <summary>
@@ -224,6 +242,22 @@ public class RxPhysics_Broker : NetworkBehaviour {
     }
 
     /// <summary>
+    /// Send ID sync request data to server
+    /// </summary>
+    [Client]
+    private void SendSyncRequest()
+    {
+        while (_pendingSyncEntitiesID.Count > 0)
+        {
+            RxPhysics_IDSyncMsg msg = new RxPhysics_IDSyncMsg();
+            msg.conID = _brokerClient.connection.connectionId;
+            msg.syncData = new RxPhysics_IDSync();
+            msg.syncData.netID = _pendingSyncEntitiesID.Dequeue();
+            _brokerClient.Send(RxMsgType.IDSync, msg);
+        }
+    }
+
+    /// <summary>
     /// Send remove entity request to server
     /// </summary>
     [Client]
@@ -248,6 +282,19 @@ public class RxPhysics_Broker : NetworkBehaviour {
         while (_pendingRegEntitiesID.Count > 0)
         {
             _judgeRef.RequestRegister(_pendingRegEntitiesID.Dequeue());
+        }
+    }
+
+    /// <summary>
+    /// Distribute synced netID and entID data
+    /// </summary>
+    [Client]
+    private void DistributeSyncedID()
+    {
+        while (_pendingDistribID.Count > 0)
+        {
+            RxPhysics_IDSync data = _pendingDistribID.Dequeue();
+            ClientScene.FindLocalObject(data.netID).GetComponent<RxPhysics_Entity>().AssignEntityID(data.entID);
         }
     }
 
@@ -279,6 +326,7 @@ public class RxPhysics_Broker : NetworkBehaviour {
     /// Process received collision data
     /// </summary>
     /// <param name="netMsg"></param>
+    [Server]
     private void OnCollisionDataReceived(NetworkMessage netMsg)
     {
         RxPhysics_ColMessage msg = netMsg.ReadMessage<RxPhysics_ColMessage>();
@@ -290,6 +338,7 @@ public class RxPhysics_Broker : NetworkBehaviour {
     /// Add requested entity registration to queue
     /// </summary>
     /// <param name="netMsg">Network message</param>
+    [Server]
     private void OnRegisterReqMsgReceived(NetworkMessage netMsg)
     {
         RxPhysics_RegMessage msg = netMsg.ReadMessage<RxPhysics_RegMessage>();
@@ -304,6 +353,7 @@ public class RxPhysics_Broker : NetworkBehaviour {
     /// Remove assigned entity from physics manager
     /// </summary>
     /// <param name="netMsg">Network message</param>
+    [Server]
     private void OnRemoveRegMsgReceived(NetworkMessage netMsg)
     {
         RxPhysics_RegMessage msg = netMsg.ReadMessage<RxPhysics_RegMessage>();
@@ -318,6 +368,7 @@ public class RxPhysics_Broker : NetworkBehaviour {
     /// Calculate and return the time gap between server and client
     /// </summary>
     /// <param name="netMsg">Network message</param>
+    [Server]
     private void OnTimeCalibReqReceived(NetworkMessage netMsg)
     {
         RxPhysics_TimeReq msg = netMsg.ReadMessage<RxPhysics_TimeReq>();
@@ -341,7 +392,37 @@ public class RxPhysics_Broker : NetworkBehaviour {
             _lastGapUpdateTime = Time.realtimeSinceStartup;
         }
     }
+
+    /// <summary>
+    /// Find and return corresponding entity ID
+    /// </summary>
+    /// <param name="netMsg">Network message</param>
+    [Server]
+    private void OnSyncIDReqRequest(NetworkMessage netMsg)
+    {
+        RxPhysics_IDSyncMsg msg = netMsg.ReadMessage<RxPhysics_IDSyncMsg>();
+        msg.syncData.entID = NetworkServer.FindLocalObject(msg.syncData.netID).GetComponent<RxPhysics_Entity>().GetEntityID();
+        NetworkServer.SendToClient(msg.conID, RxMsgType.IDSync, msg);
+    }
+
+    /// <summary>
+    /// Enque received ID sync data
+    /// </summary>
+    /// <param name="netMsg">Network message</param>
+    [Client]
+    private void OnSyncIDRepReceived(NetworkMessage netMsg)
+    {
+        RxPhysics_IDSyncMsg msg = netMsg.ReadMessage<RxPhysics_IDSyncMsg>();
+        _pendingDistribID.Enqueue(msg.syncData);
+    }
+
+    private void OnDestroy()
+    {
+        _brokerClient.Shutdown();
+        NetworkManager.singleton.client.Shutdown();
+    }
 }
+
 
 /// <summary>
 /// Collison information data struct
@@ -368,6 +449,7 @@ public class RxMsgType
     public static short CollisionData = MsgType.Highest + 2;
     public static short RemoveReg     = MsgType.Highest + 3;
     public static short CalibrateTime = MsgType.Highest + 4;
+    public static short IDSync        = MsgType.Highest + 5;
 }
 
 /// <summary>
@@ -398,4 +480,22 @@ public class RxPhysics_TimeReq : MessageBase
     public int conID;
     public float clientTime;
     public float serverTime;
+}
+
+/// <summary>
+/// ID sync data
+/// </summary>
+public struct RxPhysics_IDSync
+{
+    public NetworkInstanceId netID;
+    public int entID;
+}
+
+/// <summary>
+/// ID sync message
+/// </summary>
+public class RxPhysics_IDSyncMsg : MessageBase
+{
+    public int conID;
+    public RxPhysics_IDSync syncData;
 }
