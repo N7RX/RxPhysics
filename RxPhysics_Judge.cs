@@ -140,24 +140,27 @@ public class RxPhysics_Judge : NetworkBehaviour {
             return;
         }
 
-        StartCoroutine(CheckCollisionPendingTimeout());
+        //StartCoroutine(CheckCollisionPendingTimeout());
+        CheckCollisionPendingTimeout();
     }
 
     /// <summary>
     /// Clear time-out collisoin pendings
     /// </summary>
     [Server]
-    private IEnumerator CheckCollisionPendingTimeout()
+    //private IEnumerator CheckCollisionPendingTimeout()
+    private void CheckCollisionPendingTimeout()
     {
-        foreach (Vector2 key in _listOfCollisionRequest.Keys)
+        List<Vector2> buffer = new List<Vector2>(_listOfCollisionRequest.Keys);
+        foreach(Vector2 key in buffer)
         {
             if (Time.realtimeSinceStartup - _listOfCollisionRequest[key].StartPendingTime >= CollisionPendingTimeout)
             {
                 _listOfCollision.Enqueue(_listOfCollisionRequest[key]);
                 _listOfCollisionRequest.Remove(key);
-            }
 
-            yield return null;
+                //yield return null;
+            }
         }
     }
 

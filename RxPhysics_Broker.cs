@@ -15,10 +15,11 @@ using UnityEngine.Networking;
 [RequireComponent(typeof(RxPhysics_Predict))]
 public class RxPhysics_Broker : NetworkBehaviour {
 
-    // Connection info
+    [Header("Connection Info")]
     public string ServerIP = "localhost";
     public int  ServerPort = 7777;
-    // Time gap update interval
+
+    [Header("Performance")]
     public float TimeGapUpdateInterval = 1f;
     
     [HideInInspector]
@@ -29,13 +30,24 @@ public class RxPhysics_Broker : NetworkBehaviour {
     // Judge reference (server)
     private RxPhysics_Judge _judgeRef;
 
-    // Client entities pending to send register request (client)
+    /// <summary>
+    /// Client side
+    /// </summary>
+    // Client entities pending to send register request
     private Queue<NetworkInstanceId> _pendingSendRegEntitiesID = new Queue<NetworkInstanceId>();
-    // Client entities pending to send remove request (client)
+    // Client entities pending to send remove request
     private Queue<int> _pendingSendRemoveEntitiesID = new Queue<int>();
-    // Queued collision data (client)
+    // Queued collision data
     private Queue<RxPhysics_CollisionData> _pendingSendCollisionData = new Queue<RxPhysics_CollisionData>();
 
+    // Time gap between server and client
+    private float _clientSeverTimeGap;
+    private bool _gapNeedsUpdate;
+    private float _lastGapUpdateTime = 0;
+
+    /// <summary>
+    /// Server side
+    /// </summary>
     // Client entities pending to register (server)
     private Queue<NetworkInstanceId> _pendingRegEntitiesID   = new Queue<NetworkInstanceId>();
     // Client entities pending to remove (server)
@@ -43,13 +55,9 @@ public class RxPhysics_Broker : NetworkBehaviour {
     // Client collision pending to be processed (server)
     private Queue<RxPhysics_CollisionData> _pendingCollision = new Queue<RxPhysics_CollisionData>();
 
-    // Time gap between server and client (client)
-    private float _clientSeverTimeGap;
-    private bool  _gapNeedsUpdate;
-    private float _lastGapUpdateTime = 0;
-
     // Length of duration that the entity can't be added force on after a collision
     private float _refractoryTime = 0.3f;
+
 
     /// <summary>
     /// Initialization

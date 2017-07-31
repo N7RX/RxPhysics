@@ -13,12 +13,21 @@ using UnityEngine.Networking;
 /// </summary>
 public class RxPhysics_Compute : NetworkBehaviour {
 
-    // Determines to what extend the server weights in the implementation result
+    [Header("Bias")]
+    // To what extend the server weights in the result
     [SerializeField] [Range(0, 1)] private float _serverWeight = 0.6f;
+    // To what extend the perceived delay weights in the result
+    [SerializeField] [Range(0, 2)] private float  _delayWeight = 1f;
+
+    [Header("Calibrations")]
     // If the computed position and current position is less than this threshold, no position update will be made 
     [SerializeField] private float _ignoreDistance = 0.1f;
     // Vertical velocity under this threshold will be cut off to prevent vibrating
     [SerializeField] private float _verticalVelocityCutoff = 0.01f;
+
+    // Heuristic collison detection
+    private Ray _ray = new Ray();
+    private RaycastHit _rayHit = new RaycastHit(); 
 
     /// <summary>
     /// Collison physics calculated on server
@@ -33,7 +42,7 @@ public class RxPhysics_Compute : NetworkBehaviour {
         Vector3 pos1 = new Vector3(data.CollisionPosition_1.y, data.CollisionPosition_1.z, data.CollisionPosition_1.w);
         Vector3 pos2 = new Vector3(data.CollisionPosition_2.y, data.CollisionPosition_2.z, data.CollisionPosition_2.w);
 
-        // Sample calculation, without friction
+        // Sample calculation using momentum physics
 
         float v1_res_mag = 0, v2_res_mag = 0;
         if (!entity_1.IsObstacle && !entity_2.IsObstacle)
@@ -66,16 +75,17 @@ public class RxPhysics_Compute : NetworkBehaviour {
             v2_res.y = 0;
         }
 
-        float elapsedTime = Time.realtimeSinceStartup - data.CollisionTime;
-        float deltaTranslate = (elapsedTime + data.Delay) / Time.fixedDeltaTime;
+        // Time perceived to have elapsed after the collision
+        float elpasedTime = (Time.realtimeSinceStartup - data.CollisionTime + data.Delay) * _delayWeight;
 
         if (!entity_1.IsObstacle && !entity_1.IsLocalSimOnly())
         {
-            if ((entity_1.transform.position - (pos1 + v1_res * deltaTranslate)).magnitude > _ignoreDistance)
+            Vector3 serverPos = pos1 + TranslationCalculus(ref v1_res, entity_1.Friction, elpasedTime);
+            if ((entity_1.transform.position - serverPos).magnitude > _ignoreDistance)
             {
                 // Take median value
-                Vector3 pos1_res = (pos1 + v1_res * deltaTranslate) * _serverWeight
-                    + entity_1.transform.position * (1 - _serverWeight);
+                Vector3 pos1_res = serverPos * _serverWeight + entity_1.transform.position * (1 - _serverWeight);
+                HeuristicCollisionDetection(entity_1.GetColliderRadius(), entity_1.transform.position, ref pos1_res);
                 entity_1.RpcSetPosition(pos1_res);
             }
 
@@ -84,10 +94,11 @@ public class RxPhysics_Compute : NetworkBehaviour {
         }
         if (!entity_2.IsObstacle && !entity_2.IsLocalSimOnly())
         {
-            if ((entity_2.transform.position - (pos2 + v2_res * deltaTranslate)).magnitude > _ignoreDistance)
+            Vector3 serverPos = pos2 + TranslationCalculus(ref v2_res, entity_2.Friction, elpasedTime);
+            if ((entity_2.transform.position - serverPos).magnitude > _ignoreDistance)
             {
-                Vector3 pos2_res = (pos2 + v2_res * deltaTranslate) * _serverWeight
-                + entity_2.transform.position * (1 - _serverWeight);
+                Vector3 pos2_res = serverPos * _serverWeight + entity_2.transform.position * (1 - _serverWeight);
+                HeuristicCollisionDetection(entity_2.GetColliderRadius(), entity_2.transform.position, ref pos2_res);
                 entity_2.RpcSetPosition(pos2_res);
             }
 
@@ -96,4 +107,44 @@ public class RxPhysics_Compute : NetworkBehaviour {
         }
     }
 
+    /// <summary>
+    /// Calculate translation distance with friction. Note that velocity will also be modifed after the calculation
+    /// </summary>
+    /// <param name="initVelocity">Instant velocity</param>
+    /// <param name="friction">Entity's friction</param>
+    /// <param name="time">Duration</param>
+    /// <returns>Distance translated</returns>
+    private Vector3 TranslationCalculus(ref Vector3 initVelocity, float friction, float time)
+    {
+        Vector3 result = Vector3.zero;
+        float frictionFactor = (1 - friction * friction);
+
+        int steps = (int)(time / Time.fixedDeltaTime);
+
+        for (int i = 0; i < steps; i++)
+        {
+            result += initVelocity;
+            initVelocity *= frictionFactor;
+        }
+
+        return result;
+    }
+
+
+    /// <summary>
+    /// Check and adjust if the entity would collide with another object when it moves to the calcuated position
+    /// </summary>
+    /// <param name="radius">Entity radius</param>
+    /// <param name="oriPos">Start</param>
+    /// <param name="destPos">Destination</param>
+    private void HeuristicCollisionDetection(float radius, Vector3 oriPos,ref Vector3 destPos)
+    {
+        _ray.origin = oriPos;
+        _ray.direction = destPos - oriPos;
+
+        if (Physics.Raycast(_ray, out _rayHit, (destPos - oriPos).magnitude))
+        {
+            destPos = _rayHit.point - radius * _ray.direction.normalized;
+        }
+    }
 }

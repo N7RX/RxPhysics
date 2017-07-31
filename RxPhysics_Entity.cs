@@ -26,17 +26,18 @@ public class RxPhysics_Entity : NetworkBehaviour {
     [Header("Damping")]
     [Range(0, 1)] public float Friction = 0;
     [Range(0, 1)] public float AngularDamping = 0;
-    [Range(0, 1)] public float VerticalDamping = 0.8f; // Value should be less than 1,
-                                                       // otherwise the object might never settle on the ground if it's bounciness is greater than 1
 
     // Velocity used to move per fixed update
     [HideInInspector]
     public Vector3 TranslateVelocity = Vector3.zero;
 
-    // Effects parameters
-    [Header("Effects Parameters")]
+    [Header("Collision Parameters")]
     [Range(0, 1)] public float Bounciness = 1f;
+    [Range(0, 1)] public float VerticalDamping = 0.8f; // Value is suggested to be less than 1,
+                                                       // otherwise the object might never settle on the ground 
+                                                       // if it's bounciness is greater than 1 with a zero friction.
     [SerializeField] private float _groundDetectionBias = 0.02f;
+    [SerializeField] [Range(0, 0.99f)] private float _penetrateDetectionBias = 0.1f;
 
     [Header("Network")]
     [SerializeField] private bool _localSimulationOnly = false;
@@ -56,17 +57,25 @@ public class RxPhysics_Entity : NetworkBehaviour {
     // Collider component
     private Collider _collider;
     // Collision detector
-    private Ray _ray;
+    private Ray _ray = new Ray();
+    private RaycastHit _rayHit = new RaycastHit();
     private float _detectionRadius;
     private float _penetrateRadius;
     // Gravity smoother
     private float _gravityScalar;
+    // Disable control in the air
+    private bool  _isAboveGround;
     // Force that is currently applied to this entity
     private Vector3 _currentlyAppliedForce;
     private Vector3 _acceleration;
     // Length of duration that the entity can't be added force on after a collision
     private float _refractoryTime = 0;
-    private bool _isRefractory = false;
+    private bool  _isRefractory = false;
+    // Cut off velocity that belows certain threshold
+    private float _velocityCutoff;
+    // Actual friction factor
+    private float _frictionFactor;
+
 
     /// <summary>
     /// Initialization
@@ -75,7 +84,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
     {
         _collider = this.GetComponent<Collider>();
         _detectionRadius = _collider.bounds.extents.y * (1 + _groundDetectionBias);
-        _penetrateRadius = _collider.bounds.extents.y * 0.9f; // Empirical value
+        _penetrateRadius = _collider.bounds.extents.y * (1 - _penetrateDetectionBias); // Empirical value
         _lastPos = transform.position;
         _currentlyAppliedForce = Vector3.zero;
         _acceleration = Vector3.zero;
@@ -83,6 +92,16 @@ public class RxPhysics_Entity : NetworkBehaviour {
         _broker = GameObject.FindObjectOfType<RxPhysics_Broker>();
         _physicsPredictor = _broker.gameObject.GetComponent<RxPhysics_Predict>();
         _refractoryTime = _broker.GetRefractoryTime();
+        _velocityCutoff = _physicsPredictor.GetVelocityCutoff();
+        _frictionFactor = Friction * Friction;
+
+        // Force correct component settings
+        _collider.isTrigger = true;
+        this.GetComponent<Rigidbody>().useGravity = false;
+        if (IsObstacle)
+        {
+            this.GetComponent<Rigidbody>().isKinematic = true;
+        }
 
         RegisterEntity();
     }
@@ -125,6 +144,11 @@ public class RxPhysics_Entity : NetworkBehaviour {
         return _entityID;
     }
 
+    public float GetColliderRadius()
+    {
+        return _collider.bounds.extents.x;
+    }
+
     /// <summary>
     /// Calculate physics every fixed interval
     /// </summary>
@@ -134,6 +158,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
         ApplyAccleration();
         ApplyVelocity();
         ApplyDamping();
+        PenetrationAvoidance();
         CalibrateVelocity();
     }
 
@@ -158,7 +183,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
             return;
         }
 
-        _ray.origin = transform.position;
+        _ray.origin = this.transform.position;
         // Preserved for gravity inversion
         if (Gravity >= 0)
         {
@@ -172,13 +197,28 @@ public class RxPhysics_Entity : NetworkBehaviour {
         if (!Physics.Raycast(_ray, _detectionRadius))
         {         
             AddForce(_ray.direction * _gravityScalar);
+            _isAboveGround = true;
         }
-
-        // Prevent object from penetrating the ground
-        if (Physics.Raycast(_ray, _penetrateRadius))
+        else
         {
-            TranslateVelocity.y = -TranslateVelocity.y * Bounciness;
-            transform.Translate(-_ray.direction * _collider.bounds.extents.y * 0.15f); // Empirical value
+            _isAboveGround = false;
+        }
+    }
+
+    /// <summary>
+    /// Prevent object from penetrating other objects
+    /// </summary>
+    private void PenetrationAvoidance()
+    {
+        if (!IsObstacle)
+        {
+            _ray.origin = this.transform.position;
+            _ray.direction = TranslateVelocity;
+
+            if (Physics.Raycast(_ray, out _rayHit, _penetrateRadius))
+            {
+                transform.Translate(-_ray.direction * (_penetrateRadius - _rayHit.distance));
+            }
         }
     }
 
@@ -195,7 +235,21 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// </summary>
     private void ApplyDamping()
     {
-        TranslateVelocity *= (1 - Friction);
+        TranslateVelocity *= (1 - _frictionFactor);
+
+        if (Mathf.Abs(TranslateVelocity.x) <= float.Epsilon)
+        {
+            TranslateVelocity.x = 0;
+        }
+        if (Mathf.Abs(TranslateVelocity.y) <= _velocityCutoff)
+        {
+            TranslateVelocity.y = 0;
+        }
+        if (Mathf.Abs(TranslateVelocity.z) <= float.Epsilon)
+        {
+            TranslateVelocity.z = 0;
+        }
+
         //...
     }
 
@@ -214,7 +268,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// <param name="force">Applied force</param>
     public void AddForce(Vector3 force)
     {
-        if (!_isRefractory)
+        if (!_isRefractory && !_isAboveGround)
         {
             _currentlyAppliedForce += force;
         }
@@ -231,53 +285,55 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// <param name="other">The other collider</param>
     private void OnTriggerEnter(Collider other)
     {
-        if (other.gameObject.GetComponent<RxPhysics_Entity>() != null)
+        if (isLocalPlayer && !IsObstacle)
         {
-            RxPhysics_Entity otherEntity = other.gameObject.GetComponent<RxPhysics_Entity>();
-
-            Vector2 idPair; // (larger.ID, smaller.ID)
-            idPair.x = _entityID;
-            idPair.y = otherEntity.GetEntityID();
-
-            // Construct collision data pack
-            RxPhysics_CollisionData data = new RxPhysics_CollisionData();
-
-            data.CollisionTime = Time.realtimeSinceStartup + _broker.GetClientServerTimeGap();
-            data.CollisionVelocity_1 = new Vector4(_entityID, _mathematicalVelocity.x, _mathematicalVelocity.y, _mathematicalVelocity.z);
-            data.CollisionVelocity_2 = new Vector4(idPair.y, otherEntity.GetVelocity().x, otherEntity.GetVelocity().y, otherEntity.GetVelocity().z);
-            data.CollisionPosition_1 = new Vector4(_entityID, transform.position.x, transform.position.y, transform.position.z);
-            data.CollisionPosition_2 = new Vector4(idPair.y, otherEntity.transform.position.x, otherEntity.transform.position.y, otherEntity.transform.position.z);
-            data.CollisionPoint = other.ClosestPoint(this.transform.position); // Approximate collision point
-
-            // Assert pair format
-            if (idPair.x < idPair.y)
+            if (other.gameObject.GetComponent<RxPhysics_Entity>() != null)
             {
-                float temp = idPair.x;
-                idPair.x = idPair.y;
-                idPair.y = temp;
-            }
-            
-            data.IDPair = idPair;
+                RxPhysics_Entity otherEntity = other.gameObject.GetComponent<RxPhysics_Entity>();
 
-            // Request server arbitration
-            if (!_localSimulationOnly)
-            {               
-                if (isServer)
+                Vector2 idPair; // (larger.ID, smaller.ID)
+                idPair.x = _entityID;
+                idPair.y = otherEntity.GetEntityID();
+
+                // Construct collision data pack
+                RxPhysics_CollisionData data = new RxPhysics_CollisionData();
+
+                data.CollisionTime = Time.realtimeSinceStartup + _broker.GetClientServerTimeGap();
+                data.CollisionVelocity_1 = new Vector4(_entityID, _mathematicalVelocity.x, _mathematicalVelocity.y, _mathematicalVelocity.z);
+                data.CollisionVelocity_2 = new Vector4(idPair.y, otherEntity.GetVelocity().x, otherEntity.GetVelocity().y, otherEntity.GetVelocity().z);
+                data.CollisionPosition_1 = new Vector4(_entityID, transform.position.x, transform.position.y, transform.position.z);
+                data.CollisionPosition_2 = new Vector4(idPair.y, otherEntity.transform.position.x, otherEntity.transform.position.y, otherEntity.transform.position.z);
+                data.CollisionPoint = other.ClosestPoint(this.transform.position); // Approximate collision point
+
+                // Assert pair format
+                if (idPair.x < idPair.y)
                 {
-                    
-                    _judge.CallCollisonJudge(data);
+                    float temp = idPair.x;
+                    idPair.x = idPair.y;
+                    idPair.y = temp;
                 }
-                else
+
+                data.IDPair = idPair;
+
+                // Request server arbitration
+                if (!_localSimulationOnly)
                 {
-                    _broker.RequestCollisionJudge(data);
+                    if (isServer)
+                    {
+                        _judge.CallCollisonJudge(data);
+                    }
+                    else
+                    {
+                        _broker.RequestCollisionJudge(data);
+                    }
                 }
+
+                // Perform local prediction
+                _physicsPredictor.PreComputeCollision(data, this, otherEntity);
+
+                _isRefractory = true;
+                Invoke("RemoveRefractory", _refractoryTime);
             }
-
-            // Perform local prediction
-            _physicsPredictor.PreComputeCollision(data, this, otherEntity);
-
-            _isRefractory = true;
-            Invoke("RemoveRefractory", _refractoryTime);
         }
     }
 
@@ -311,7 +367,22 @@ public class RxPhysics_Entity : NetworkBehaviour {
     [ClientRpc]
     public void RpcSetVelocity(Vector3 velocity)
     {
-        this.TranslateVelocity = velocity;
+        if (isLocalPlayer)
+        {
+            this.TranslateVelocity = velocity;
+        }
+    }
+
+    /// <summary>
+    /// Set velocity for non-local player entity after prediction
+    /// </summary>
+    /// <param name="velocity">Predicted velocity</param>
+    public void PredictSetVelocity(Vector3 velocity)
+    {
+        if (!isLocalPlayer)
+        {
+            this.TranslateVelocity = velocity;
+        }
     }
 
     /// <summary>
@@ -321,8 +392,11 @@ public class RxPhysics_Entity : NetworkBehaviour {
     [ClientRpc]
     public void RpcSetPosition(Vector3 position)
     {
-        //this.transform.position = position;
-        this.transform.Translate(position - this.transform.position);
+        if (isLocalPlayer)
+        {
+            //this.transform.position = position;
+            this.transform.Translate(position - this.transform.position);
+        }
     }
 
     /// <summary>
