@@ -16,7 +16,7 @@ using UnityEngine.Networking;
 public class RxPhysics_Broker : NetworkBehaviour {
 
     [Header("Connection Info")]
-    public string ServerIP = "10.20.73.58";
+    public string ServerIP = "localhost";
     public int  ServerPort = 7777;
 
     [Header("Performance")]
@@ -499,3 +499,10 @@ public class RxPhysics_IDSyncMsg : MessageBase
     public int conID;
     public RxPhysics_IDSync syncData;
 }
+
+//public struct RxPhysics_IDPair
+//{
+//    public NetworkInstanceId x;
+//    public NetworkInstanceId y;
+//}
+

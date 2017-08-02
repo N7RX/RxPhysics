@@ -173,7 +173,7 @@ public class RxPhysics_Judge : NetworkBehaviour {
         while (_listOfCollision.Count > 0)
         {
             RxPhysics_CollisionData data = _listOfCollision.Dequeue();
-            _physicsCalculator.ComputeCollision(data,
+            _physicsCalculator.ComputeCoroutine(data,
                 _listOfEntities[(int)data.CollisionVelocity_1.x],
                 _listOfEntities[(int)data.CollisionVelocity_2.x]);
         }

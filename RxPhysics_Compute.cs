@@ -17,7 +17,9 @@ public class RxPhysics_Compute : NetworkBehaviour {
     // To what extend the server weights in the result
     [SerializeField] [Range(0, 1)] private float _serverWeight = 0.6f;
     // To what extend the perceived delay weights in the result
-    [SerializeField] [Range(0, 2)] private float  _delayWeight = 1f;
+    [SerializeField] private float _delayWeight = 10f;
+    // To what extend the perceived elapsed time weights in the result
+    [SerializeField] private float _elpasedTimeWeight = 1f;
 
     [Header("Calibrations")]
     // If the computed position and current position is less than this threshold, no position update will be made 
@@ -27,18 +29,32 @@ public class RxPhysics_Compute : NetworkBehaviour {
 
     // Heuristic collison detection
     private Ray _ray = new Ray();
-    private RaycastHit _rayHit = new RaycastHit(); 
+    private RaycastHit _rayHit = new RaycastHit();
 
     /// <summary>
-    /// Collison physics calculated on server
+    /// Function call to start a coroutine physics calculation
     /// </summary>
     /// <param name="data">Collision data</param>
+    /// <param name="entity_1">Entity one</param>
+    /// <param name="entity_2">Entity two</param>
     [Server]
-    public void ComputeCollision(RxPhysics_CollisionData data, RxPhysics_Entity entity_1, RxPhysics_Entity entity_2)
+    public void ComputeCoroutine(RxPhysics_CollisionData data, RxPhysics_Entity entity_1, RxPhysics_Entity entity_2)
+    {
+        StartCoroutine(ComputeCollision(data, entity_1, entity_2));
+    }
+
+    /// <summary>
+    /// Calculate physics in coroutine
+    /// </summary>
+    /// <param name="data">Collision data</param>
+    /// <param name="entity_1">Entity one</param>
+    /// <param name="entity_2">Entity two</param>
+    [Server]
+    private IEnumerator ComputeCollision(RxPhysics_CollisionData data, RxPhysics_Entity entity_1, RxPhysics_Entity entity_2)
     {
         Vector3 v1_ori = new Vector3(data.CollisionVelocity_1.y,
-                data.CollisionVelocity_1.z,
-                data.CollisionVelocity_1.w);
+            data.CollisionVelocity_1.z,
+            data.CollisionVelocity_1.w);
         Vector3 v2_ori = new Vector3(data.CollisionVelocity_2.y,
             data.CollisionVelocity_2.z,
             data.CollisionVelocity_2.w);
@@ -106,35 +122,37 @@ public class RxPhysics_Compute : NetworkBehaviour {
         }
 
         // Time perceived to have elapsed after the collision
-        float elpasedTime = (Time.realtimeSinceStartup - data.CollisionTime + data.Delay) * _delayWeight;
+        float preComputeTime = (Time.realtimeSinceStartup - data.CollisionTime) * _elpasedTimeWeight + data.Delay * _delayWeight;
 
         if (!entity_1.IsObstacle && !entity_1.IsLocalSimOnly())
         {
-            Vector3 serverPos = pos1 + TranslationCalculus(ref v1_res, entity_1.Friction, elpasedTime);
+            Vector3 serverPos = pos1 + TranslationCalculus(ref v1_res, entity_1.Friction, preComputeTime);
+            HeuristicCollisionDetection(entity_1.GetColliderRadius(), entity_1.transform.position, ref serverPos);
             if ((entity_1.transform.position - serverPos).magnitude > _ignoreDistance)
             {
                 // Take median value
-                Vector3 pos1_res = serverPos * _serverWeight + entity_1.transform.position * (1 - _serverWeight);
-                HeuristicCollisionDetection(entity_1.GetColliderRadius(), entity_1.transform.position, ref pos1_res);
+                Vector3 pos1_res = serverPos * _serverWeight + entity_1.transform.position * (1 - _serverWeight);             
                 entity_1.RpcSetPosition(pos1_res);
             }
 
             v1_res = v1_res * _serverWeight + entity_1.TranslateVelocity * (1 - _serverWeight);
-            entity_1.RpcSetVelocity(v1_res);       
+            entity_1.RpcSetVelocity(v1_res);
         }
         if (!entity_2.IsObstacle && !entity_2.IsLocalSimOnly())
         {
-            Vector3 serverPos = pos2 + TranslationCalculus(ref v2_res, entity_2.Friction, elpasedTime);
+            Vector3 serverPos = pos2 + TranslationCalculus(ref v2_res, entity_2.Friction, preComputeTime);
+            HeuristicCollisionDetection(entity_2.GetColliderRadius(), entity_2.transform.position, ref serverPos);
             if ((entity_2.transform.position - serverPos).magnitude > _ignoreDistance)
             {
                 Vector3 pos2_res = serverPos * _serverWeight + entity_2.transform.position * (1 - _serverWeight);
-                HeuristicCollisionDetection(entity_2.GetColliderRadius(), entity_2.transform.position, ref pos2_res);
                 entity_2.RpcSetPosition(pos2_res);
             }
 
             v2_res = v2_res * _serverWeight + entity_2.TranslateVelocity * (1 - _serverWeight);
             entity_2.RpcSetVelocity(v2_res);
         }
+
+        yield return null;
     }
 
     /// <summary>
@@ -147,13 +165,16 @@ public class RxPhysics_Compute : NetworkBehaviour {
     private Vector3 TranslationCalculus(ref Vector3 initVelocity, float friction, float time)
     {
         Vector3 result = Vector3.zero;
-        float frictionFactor = (1 - friction * friction);
+        Vector3 shadowVelocity = initVelocity; // Temporary solution using a shadow velocity to calibrate velocity
+        float shadowFriction = (1 - friction * friction);
+        float frictionFactor = (1 - friction * friction * friction);
 
         int steps = (int)(time / Time.fixedDeltaTime);
 
         for (int i = 0; i < steps; i++)
         {
-            result += initVelocity;
+            result += shadowVelocity;
+            shadowVelocity *= shadowFriction;
             initVelocity *= frictionFactor;
         }
 

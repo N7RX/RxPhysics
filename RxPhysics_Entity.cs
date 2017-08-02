@@ -179,8 +179,6 @@ public class RxPhysics_Entity : NetworkBehaviour {
     {
         if (_idSynced)
         {
-            this.transform.GetComponent<MeshRenderer>().material.color = Color.red;
-
             ImplementGravity();
             ApplyAccleration();
             ApplyVelocity();
@@ -313,7 +311,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// <param name="other">The other collider</param>
     private void OnTriggerEnter(Collider other)
     {
-        //if (isLocalPlayer && !IsObstacle)
+        //if (!IsObstacle && hasAuthority)
         if (!IsObstacle)
         {
             if (other.gameObject.GetComponent<RxPhysics_Entity>() != null)
@@ -345,15 +343,19 @@ public class RxPhysics_Entity : NetworkBehaviour {
                 data.IDPair = idPair;
 
                 // Request server arbitration
-                if (!_localSimulationOnly)
+                if (!_localSimulationOnly && hasAuthority)
                 {
-                    if (isServer)
+                    if (!(Mathf.Abs(data.CollisionPoint.y - this.transform.position.y) >= _penetrateRadius)) // Vertical collison should be calculated locally,
+                                                                                                             // otherwise small vibrations may cause nasty results.
                     {
-                        _judge.CallCollisonJudge(data);
-                    }
-                    else
-                    {
-                        _broker.RequestCollisionJudge(data);
+                        if (isServer)
+                        {
+                            _judge.CallCollisonJudge(data);
+                        }
+                        else
+                        {
+                            _broker.RequestCollisionJudge(data);
+                        }
                     }
                 }
 
@@ -393,13 +395,14 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// Set velocity after collision
     /// </summary>
     /// <param name="velocity">New velocity</param>
-    [ClientRpc]
+    //[ClientRpc]
     public void RpcSetVelocity(Vector3 velocity)
     {
-        if (isLocalPlayer)
-        {
-            this.TranslateVelocity = velocity;
-        }
+        //if (isLocalPlayer)
+        //{
+        //    this.TranslateVelocity = velocity;
+        //}
+        this.TranslateVelocity = velocity;
     }
 
     /// <summary>
@@ -412,20 +415,22 @@ public class RxPhysics_Entity : NetworkBehaviour {
         {
             this.TranslateVelocity = velocity;
         }
+        //this.TranslateVelocity = velocity;
     }
 
     /// <summary>
     /// Seperate entity after collision
     /// </summary>
     /// <param name="position">New position</param>
-    [ClientRpc]
+    //[ClientRpc]
     public void RpcSetPosition(Vector3 position)
     {
-        if (isLocalPlayer)
-        {
-            //this.transform.position = position;
-            this.transform.Translate(position - this.transform.position);
-        }
+        //if (isLocalPlayer)
+        //{
+        //    //this.transform.position = position;
+        //    this.transform.Translate(position - this.transform.position);
+        //}
+        this.transform.Translate(position - this.transform.position);
     }
 
     /// <summary>
