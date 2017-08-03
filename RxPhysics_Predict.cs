@@ -5,7 +5,7 @@ using UnityEngine;
 /// <summary>
 /// Simple physics engine by N7RX.
 /// Supports networking.
-/// Last modified: 2017-07
+/// Last modified: 2017-08
 /// 
 /// This class implements necessary physics prediction and is replaceable.
 /// This script should be attached with physics broker.
@@ -14,6 +14,7 @@ public class RxPhysics_Predict : MonoBehaviour {
 
     // Vertical velocity under this threshold will be cut off to prevent vibrating
     [SerializeField] private float _verticalVelocityCutoff = 0.01f;
+
 
     public float GetVelocityCutoff()
     {
@@ -44,8 +45,10 @@ public class RxPhysics_Predict : MonoBehaviour {
 
             // Sample calculation using approximate momentum physics
 
-            Vector3 v1_res_pri = ((entity_1.Mass - entity_2.Mass) * v1_ori + 2 * entity_2.Mass * v2_ori) / (entity_1.Mass + entity_2.Mass);
-            Vector3 v2_res_pri = ((entity_2.Mass - entity_1.Mass) * v2_ori + 2 * entity_1.Mass * v1_ori) / (entity_1.Mass + entity_2.Mass);
+            Vector3 v1_res_pri = ((entity_1.Mass - entity_2.Mass) * v1_ori + 2 * entity_2.Mass * v2_ori) 
+                / (entity_1.Mass + entity_2.Mass);
+            Vector3 v2_res_pri = ((entity_2.Mass - entity_1.Mass) * v2_ori + 2 * entity_1.Mass * v1_ori) 
+                / (entity_1.Mass + entity_2.Mass);
 
             float v1_res_mag = 0, v2_res_mag = 0;
             if (!entity_1.IsObstacle && !entity_2.IsObstacle)

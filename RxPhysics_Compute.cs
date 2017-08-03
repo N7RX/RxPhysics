@@ -6,7 +6,7 @@ using UnityEngine.Networking;
 /// <summary>
 /// Simple physics engine by N7RX.
 /// Supports networking.
-/// Last modified: 2017-07
+/// Last modified: 2017-08
 /// 
 /// This class implements necessary physics calculations and is replaceable.
 /// This script should be attached to physics manager.
@@ -17,7 +17,7 @@ public class RxPhysics_Compute : NetworkBehaviour {
     // To what extend the server weights in the result
     [SerializeField] [Range(0, 1)] private float _serverWeight = 0.6f;
     // To what extend the perceived delay weights in the result
-    [SerializeField] private float _delayWeight = 10f;
+    [SerializeField] private float _delayWeight = 2f;
     // To what extend the perceived elapsed time weights in the result
     [SerializeField] private float _elpasedTimeWeight = 1f;
 
@@ -68,8 +68,10 @@ public class RxPhysics_Compute : NetworkBehaviour {
 
         // Sample calculation using approximate momentum physics
 
-        Vector3 v1_res_pri = ((entity_1.Mass - entity_2.Mass) * v1_ori + 2 * entity_2.Mass * v2_ori) / (entity_1.Mass + entity_2.Mass);
-        Vector3 v2_res_pri = ((entity_2.Mass - entity_1.Mass) * v2_ori + 2 * entity_1.Mass * v1_ori) / (entity_1.Mass + entity_2.Mass);
+        Vector3 v1_res_pri = ((entity_1.Mass - entity_2.Mass) * v1_ori + 2 * entity_2.Mass * v2_ori) 
+            / (entity_1.Mass + entity_2.Mass);
+        Vector3 v2_res_pri = ((entity_2.Mass - entity_1.Mass) * v2_ori + 2 * entity_1.Mass * v1_ori) 
+            / (entity_1.Mass + entity_2.Mass);
 
         float v1_res_mag = 0, v2_res_mag = 0;
         if (!entity_1.IsObstacle && !entity_2.IsObstacle)
@@ -122,15 +124,18 @@ public class RxPhysics_Compute : NetworkBehaviour {
         }
 
         // Time perceived to have elapsed after the collision
-        float preComputeTime = (Time.realtimeSinceStartup - data.CollisionTime) * _elpasedTimeWeight + data.Delay * _delayWeight;
+        float preComputeTime = (Time.realtimeSinceStartup - data.CollisionTime) * _elpasedTimeWeight 
+            + data.Delay * _delayWeight;
 
         if (!entity_1.IsObstacle && !entity_1.IsLocalSimOnly())
         {
             Vector3 serverPos = pos1 + TranslationCalculus(ref v1_res, entity_1.Friction, preComputeTime);
+            // Detect whether the calculated destination would lead to another collision
             HeuristicCollisionDetection(entity_1.GetColliderRadius(), entity_1.transform.position, ref serverPos);
+
             if ((entity_1.transform.position - serverPos).magnitude > _ignoreDistance)
             {
-                // Take median value
+                // Take weighted value
                 Vector3 pos1_res = serverPos * _serverWeight + entity_1.transform.position * (1 - _serverWeight);             
                 entity_1.RpcSetPosition(pos1_res);
             }
@@ -142,6 +147,7 @@ public class RxPhysics_Compute : NetworkBehaviour {
         {
             Vector3 serverPos = pos2 + TranslationCalculus(ref v2_res, entity_2.Friction, preComputeTime);
             HeuristicCollisionDetection(entity_2.GetColliderRadius(), entity_2.transform.position, ref serverPos);
+
             if ((entity_2.transform.position - serverPos).magnitude > _ignoreDistance)
             {
                 Vector3 pos2_res = serverPos * _serverWeight + entity_2.transform.position * (1 - _serverWeight);

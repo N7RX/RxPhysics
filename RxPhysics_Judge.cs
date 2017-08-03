@@ -6,7 +6,7 @@ using UnityEngine.Networking;
 /// <summary>
 /// Simple physics engine by N7RX.
 /// Supports networking.
-/// Last modified: 2017-07
+/// Last modified: 2017-08
 /// 
 /// This class provides arbitration of physics calculation.
 /// This script should be attached to physics manager.
@@ -18,15 +18,22 @@ public class RxPhysics_Judge : NetworkBehaviour {
     // After which period the pending collision would be calculated directly without waiting for opponent's confirmation
     public float CollisionPendingTimeout = 0.3f;
 
-    // Count used to assign entity ID
-    private int _entityNum = 0;
+    [Header("Optional Appendices")]
+    public GameObject CollisionDebris;
+    public Transform  Ground;
+
     // Reference to physics calculator
     private RxPhysics_Compute _physicsCalculator;
-    // List of registered physics entity
-    private Dictionary<int, RxPhysics_Entity> _listOfEntities = new Dictionary<int, RxPhysics_Entity>();
-    // List of collision waiting to be processed
+
+    // Count used to assign entity ID
+    private int _entityNum = 0;
+    // List of collision waiting to be confirmed
     private Dictionary<Vector2, RxPhysics_CollisionData> _listOfCollisionRequest = new Dictionary<Vector2, RxPhysics_CollisionData>();
-    private Queue<RxPhysics_CollisionData> _listOfCollision = new Queue<RxPhysics_CollisionData>();
+    // List of registered physics entity
+    private Dictionary<int, RxPhysics_Entity> _listOfEntities  = new Dictionary<int, RxPhysics_Entity>();
+    // List of collision waiting to be processed
+    private Queue<RxPhysics_CollisionData>    _listOfCollision = new Queue<RxPhysics_CollisionData>();
+
 
     /// <summary>
     /// Initialization
@@ -50,7 +57,8 @@ public class RxPhysics_Judge : NetworkBehaviour {
         RxPhysics_Entity entity = NetworkServer.FindLocalObject(identity).GetComponent<RxPhysics_Entity>();
         entity.AssignEntityID(_entityNum);
         _listOfEntities.Add(_entityNum, entity);
-        // Next assigned ID
+
+        // Next ID to assign
         _entityNum++;
     }
 
@@ -81,6 +89,8 @@ public class RxPhysics_Judge : NetworkBehaviour {
         {           
             data.StartPendingTime = Time.realtimeSinceStartup;
             _listOfCollisionRequest.Add(data.IDPair, data);
+
+            GenerateDebris(data.CollisionPoint);
         }
         // Collision confirmed
         else
@@ -140,7 +150,6 @@ public class RxPhysics_Judge : NetworkBehaviour {
             return;
         }
 
-        //StartCoroutine(CheckCollisionPendingTimeout());
         CheckCollisionPendingTimeout();
     }
 
@@ -148,7 +157,6 @@ public class RxPhysics_Judge : NetworkBehaviour {
     /// Clear time-out collisoin pendings
     /// </summary>
     [Server]
-    //private IEnumerator CheckCollisionPendingTimeout()
     private void CheckCollisionPendingTimeout()
     {
         List<Vector2> buffer = new List<Vector2>(_listOfCollisionRequest.Keys);
@@ -158,8 +166,6 @@ public class RxPhysics_Judge : NetworkBehaviour {
             {
                 _listOfCollision.Enqueue(_listOfCollisionRequest[key]);
                 _listOfCollisionRequest.Remove(key);
-
-                //yield return null;
             }
         }
     }
@@ -177,6 +183,19 @@ public class RxPhysics_Judge : NetworkBehaviour {
                 _listOfEntities[(int)data.CollisionVelocity_1.x],
                 _listOfEntities[(int)data.CollisionVelocity_2.x]);
         }
+    }
+
+    /// <summary>
+    /// Additional function: Generate debris effect on collision point
+    /// </summary>
+    /// <param name="pos">Spawn position</param>
+    [Server]
+    private void GenerateDebris(Vector3 pos)
+    {
+        GameObject debris = Instantiate(CollisionDebris, pos, Quaternion.Euler(Vector3.zero));
+        debris.GetComponent<ParticleSystem>().collision.SetPlane(0, Ground);
+        NetworkServer.Spawn(debris);
+        Destroy(debris, 4f);
     }
 
     private void OnDestroy()
