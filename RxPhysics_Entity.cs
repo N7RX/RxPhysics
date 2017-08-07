@@ -86,13 +86,13 @@ public class RxPhysics_Entity : NetworkBehaviour {
     // Translation compensation
     private float _compensateDuration = 0.3f;
     [SyncVar] private Vector3 _translateCompensation = Vector3.zero;
-    [SyncVar] private int _remainingCompensationStep = 0;
+    private int _remainingCompensationStep = 0;
 
     // Network transform synchronization
     private NetworkTransform _transformSync = null;
-    [SyncVar(hook = "SwapTransformSyncMode")] private float _syncInterval = 0.05f;
-    private readonly float _reSyncTimeout = 0.5f;
-    private float          _initSyncInterval = 0.05f;
+    [SyncVar(hook = "SwapTransformSyncMode")] private bool _blockSync;
+    private readonly float _reSyncTimeout     = 0.5f;
+    private float          _initSyncInterval  = 0.05f;
     private readonly float _blockSyncInterval = 65536;
 
 
@@ -395,13 +395,17 @@ public class RxPhysics_Entity : NetworkBehaviour {
                         {
                             _broker.RequestCollisionJudge(data);
                         }
-                    }
 
-                    _syncInterval = _blockSyncInterval;
-                    if (_transformSync != null)
-                    {
-                        _transformSync.sendInterval = _syncInterval;
-                        Invoke("ReSyncTransform", _reSyncTimeout);
+                        _blockSync = true;
+                        if (!isServer)
+                        {
+                            CmdSwapTransformSyncMode();
+                        }
+                        if (_transformSync != null)
+                        {
+                            _transformSync.sendInterval = _blockSyncInterval;
+                            Invoke("ReSyncTransform", _reSyncTimeout);
+                        }
                     }
                 }
 
@@ -466,10 +470,10 @@ public class RxPhysics_Entity : NetworkBehaviour {
     [ClientRpc]
     public void RpcSetPosition(Vector3 position)
     {
-        _syncInterval = _initSyncInterval;
+        _blockSync = false;
         if (_transformSync != null)
         {
-            _transformSync.sendInterval = _syncInterval;
+            _transformSync.sendInterval = _initSyncInterval;
         }
 
         int factor = (int)(_compensateDuration / Time.fixedDeltaTime);
@@ -499,16 +503,54 @@ public class RxPhysics_Entity : NetworkBehaviour {
     }
 
     /// <summary>
-    /// Enable/Disable network transform synchronization
+    /// Sync transform sync state from server to client
     /// </summary>
-    private void SwapTransformSyncMode(float interval)
+    private void SwapTransformSyncMode(bool sync)
     {
+        _blockSync = sync; // Hook function will override auto-sync
+
         if (_transformSync != null)
         {
-            _transformSync.sendInterval = interval;
-            if (interval >= (_blockSyncInterval - 1) && !hasAuthority)
+            if (!_blockSync)
             {
-                this.TranslateVelocity = _mathematicalVelocity;
+                _transformSync.sendInterval = _initSyncInterval;
+            }
+            else
+            {
+                _transformSync.sendInterval = _blockSyncInterval;
+                Invoke("ReSyncTransform", _reSyncTimeout);
+
+                if (!hasAuthority)
+                {
+                    this.TranslateVelocity = _mathematicalVelocity;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sync transform sync state from client to server
+    /// </summary>
+    [Command]
+    private void CmdSwapTransformSyncMode()
+    {
+        _blockSync = !_blockSync;
+
+        if (_transformSync != null)
+        {
+            if (!_blockSync)
+            {
+                _transformSync.sendInterval = _initSyncInterval;
+            }
+            else
+            {
+                _transformSync.sendInterval = _blockSyncInterval;
+                Invoke("ReSyncTransform", _reSyncTimeout);
+
+                if (!hasAuthority)
+                {
+                    this.TranslateVelocity = _mathematicalVelocity;
+                }
             }
         }
     }
@@ -518,10 +560,10 @@ public class RxPhysics_Entity : NetworkBehaviour {
     /// </summary>
     private void ReSyncTransform()
     {
-        _syncInterval = _initSyncInterval;
+        _blockSync = false;
         if (_transformSync != null)
         {
-            _transformSync.sendInterval = _syncInterval;
+            _transformSync.sendInterval = _initSyncInterval;
         }
     }
 

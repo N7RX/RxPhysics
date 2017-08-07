@@ -15,7 +15,10 @@ public class RxPhysics_Predict : MonoBehaviour {
     // Vertical velocity under this threshold will be cut off to prevent vibrating
     [SerializeField] private float _verticalVelocityCutoff = 0.01f;
 
-
+    /// <summary>
+    /// (As how it's named)
+    /// </summary>
+    /// <returns>(As it's name)</returns>
     public float GetVelocityCutoff()
     {
         return _verticalVelocityCutoff;
