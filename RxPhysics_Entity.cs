@@ -351,6 +351,7 @@ public class RxPhysics_Entity : NetworkBehaviour {
 
                 // Construct collision data pack
                 RxPhysics_CollisionData data = new RxPhysics_CollisionData();
+                data.DontWait = false;
 
                 data.CollisionTime = Time.realtimeSinceStartup + _broker.GetClientServerTimeGap();
                 data.CollisionVelocity_1 = new Vector4(_entityID, 
@@ -387,6 +388,10 @@ public class RxPhysics_Entity : NetworkBehaviour {
                     if (!(Mathf.Abs(data.CollisionPoint.y - this.transform.position.y) >= _penetrateRadius)) // Vertical collison should be calculated locally,
                                                                                                              // otherwise small vibrations may cause nasty results.
                     {
+                        if (otherEntity.IsObstacle)
+                        {
+                            data.DontWait = true;
+                        }
                         if (isServer)
                         {
                             _judge.CallCollisonJudge(data);

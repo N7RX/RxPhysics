@@ -460,6 +460,7 @@ public struct RxPhysics_CollisionData
     public Vector4 CollisionPosition_1; // (int ID, Vec3 Position)
     public Vector4 CollisionPosition_2;
     public Vector3 CollisionPoint;
+    public bool    DontWait;
 }
 
 /// <summary>

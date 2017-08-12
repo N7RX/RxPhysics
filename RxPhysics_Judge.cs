@@ -162,7 +162,8 @@ public class RxPhysics_Judge : NetworkBehaviour {
         List<Vector2> buffer = new List<Vector2>(_listOfCollisionRequest.Keys);
         foreach(Vector2 key in buffer)
         {
-            if (Time.realtimeSinceStartup - _listOfCollisionRequest[key].StartPendingTime >= CollisionPendingTimeout)
+            if ((Time.realtimeSinceStartup - _listOfCollisionRequest[key].StartPendingTime >= CollisionPendingTimeout) 
+                || _listOfCollisionRequest[key].DontWait)
             {
                 _listOfCollision.Enqueue(_listOfCollisionRequest[key]);
                 _listOfCollisionRequest.Remove(key);
